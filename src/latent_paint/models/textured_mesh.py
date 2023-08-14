@@ -13,6 +13,10 @@ from .render import Renderer
 from src.latent_paint.configs.train_config import TrainConfig
 
 
+'''
+ming
+'''
+from .utils import *
 class TexturedMeshModel(nn.Module):
     def __init__(self,
                  opt: TrainConfig,
@@ -41,42 +45,31 @@ class TexturedMeshModel(nn.Module):
 
         self.renderer = Renderer(device=self.device, dim=(render_grid_size, render_grid_size),
                                  interpolation_mode=self.opt.guide.texture_interpolation_mode)
-        self.env_sphere, self.mesh = self.init_meshes()
-        self.background_sphere_colors, self.texture_img, self.texture_img_rgb_finetune = self.init_paint()
+        '''
+        ming
+        '''
+        # self.env_sphere, self.mesh = self.init_meshes()
+        # mesh and texture
+        self.env_sphere, self.mesh = (
+            Mesh('shapes/env_sphere.obj', self.device), 
+            Mesh(self.opt.guide.shape_path, self.device).normalize_mesh(inplace=True, target_scale=self.mesh_scale, dy=self.dy)
+        
+        )
+
+
+        # random style
+        # random color face attributes for background sphere
+        self.background_sphere_colors = nn.Parameter(torch.rand(1, self.env_sphere.faces.shape[0], 3, 4).cuda())
+        self.texture_img, self.texture_img_rgb_finetune = init_paint(self.linear_rgb_estimator, self.texture_resolution)
+        
+        # texture created by diffusion model   
         self.vt, self.ft = self.init_texture_map()
 
         self.face_attributes = kal.ops.mesh.index_vertices_by_faces(
             self.vt.unsqueeze(0),
             self.ft.long()).detach()
 
-    def init_meshes(self, env_sphere_path='shapes/env_sphere.obj'):
-        env_sphere = Mesh(env_sphere_path, self.device)
-
-        mesh = Mesh(self.opt.guide.shape_path, self.device)
-        mesh.normalize_mesh(inplace=True, target_scale=self.mesh_scale, dy=self.dy)
-
-        return env_sphere, mesh
-
-    def init_paint(self, init_rgb_color=(1.0, 0.0, 0.0)):
-        # random color face attributes for background sphere
-        background_sphere_colors = nn.Parameter(torch.rand(1, self.env_sphere.faces.shape[0], 3, 4).cuda())
-
-        # inverse linear approx to find latent
-        A = self.linear_rgb_estimator.T
-        regularizer = 1e-2
-        init_color_in_latent = (torch.pinverse(A.T @ A + regularizer * torch.eye(4).cuda()) @ A.T) @ torch.tensor(
-            list(init_rgb_color)).float().to(A.device)
-
-        # init colors with target latent plus some noise
-        texture_img = nn.Parameter(
-            init_color_in_latent[None, :, None, None] * 0.3 + 0.4 * torch.randn(1, 4, self.texture_resolution,
-                                                                                self.texture_resolution).cuda())
-
-        # used only for latent-paint fine-tuning, values set when reading previous checkpoint statedict
-        texture_img_rgb_finetune = nn.Parameter(torch.zeros(1, 3,
-                                                            self.texture_resolution, self.texture_resolution).cuda())
-
-        return background_sphere_colors, texture_img, texture_img_rgb_finetune
+  
 
     def init_texture_map(self):
         cache_path = self.opt.log.exp_dir
@@ -112,6 +105,14 @@ class TexturedMeshModel(nn.Module):
         raise NotImplementedError
 
     def get_params(self):
+        '''
+        this function is used in latent-paint/training/trainer.py
+        
+        def init_optimizer(self) -> Optimizer:
+            optimizer = torch.optim.Adam(self.mesh_model.get_params(), lr=self.cfg.optim.lr, betas=(0.9, 0.99), eps=1e-15)
+            return optimizer
+        '''
+
         if self.latent_mode:
             return [self.background_sphere_colors, self.texture_img]
         else:
@@ -119,6 +120,23 @@ class TexturedMeshModel(nn.Module):
 
     @torch.no_grad()
     def export_mesh(self, path, guidance=None):
+        '''
+        this function is used in latent-paint/training/trainer.py
+        def full_eval(self):
+            try:
+                self.evaluate(self.val_large_loader, self.final_renders_path, save_as_video=True)
+            except:
+                logger.error('failed to save result video')
+
+            if self.cfg.log.save_mesh:
+                save_path = make_path(self.exp_path / 'mesh')
+                logger.info(f"Saving mesh to {save_path}")
+
+                self.mesh_model.export_mesh(save_path, guidance=self.diffusion)
+
+                logger.info(f"\tDone!")
+        '''
+
         v, f = self.mesh.vertices, self.mesh.faces.int()
         h0, w0 = 256, 256
         ssaa, name = 1, ''
@@ -179,6 +197,9 @@ class TexturedMeshModel(nn.Module):
             fp.write(f'map_Kd {name}albedo.png \n')
 
     def render(self, theta, phi, radius, decode_func=None, test=False, dims=None):
+        '''
+        train or test, using Renderer()
+        '''
         if test:
             return self.render_test(theta, phi, radius, decode_func, dims=dims)
         else:

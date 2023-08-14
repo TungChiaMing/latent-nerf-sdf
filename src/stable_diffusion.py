@@ -44,6 +44,9 @@ class StableDiffusion(nn.Module):
 
 
         # 3. The UNet model for generating the latents.
+        '''
+        Project - latent radiance network
+        '''
         self.unet = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet", use_auth_token=self.token).to(self.device)
 
         # 4. Create a scheduler for inference
@@ -104,7 +107,9 @@ class StableDiffusion(nn.Module):
 
 
     def train_step(self, text_embeddings, inputs, guidance_scale=100):
-        
+        '''
+        train latent radiance network
+        '''
         # interp to 512x512 to be fed into vae.
 
         # _t = time.time()
@@ -155,7 +160,9 @@ class StableDiffusion(nn.Module):
         return 0 # dummy loss value
 
     def produce_latents(self, text_embeddings, height=512, width=512, num_inference_steps=50, guidance_scale=7.5, latents=None):
-
+        '''
+        generate the noise on the image.
+        '''
         if latents is None:
             latents = torch.randn((text_embeddings.shape[0] // 2, self.unet.in_channels, height // 8, width // 8), device=self.device)
 
@@ -201,7 +208,9 @@ class StableDiffusion(nn.Module):
         return latents
 
     def prompt_to_img(self, prompts, height=512, width=512, num_inference_steps=50, guidance_scale=7.5, latents=None):
-
+        '''
+        text -> 2d image by diffusion model.
+        '''
         if isinstance(prompts, str):
             prompts = [prompts]
 

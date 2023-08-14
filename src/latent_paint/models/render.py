@@ -2,6 +2,11 @@ import kaolin as kal
 import torch
 import numpy as np
 
+'''
+trained by diffusion,
+in latent-paint/training/trainer.py to train by diffusion
+def train_render(self, data: Dict[str, Any]):
+'''
 class Renderer:
     # from https://github.com/threedle/text2mesh
 

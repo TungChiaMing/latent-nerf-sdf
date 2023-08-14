@@ -20,6 +20,11 @@ from src.latent_paint.training.views_dataset import ViewsDataset
 from src.stable_diffusion import StableDiffusion
 from src.utils import make_path, tensor2numpy
 
+'''
+ming
+'''
+from .utils import *
+from src.latent_paint.models.textured_mesh import TexturedMeshModel
 
 class Trainer:
     def __init__(self, cfg: TrainConfig):
@@ -30,54 +35,56 @@ class Trainer:
         utils.seed_everything(self.cfg.optim.seed)
 
         # Make dirs
-        self.exp_path = make_path(self.cfg.log.exp_dir)
-        self.ckpt_path = make_path(self.exp_path / 'checkpoints')
-        self.train_renders_path = make_path(self.exp_path / 'vis' / 'train')
-        self.eval_renders_path = make_path(self.exp_path / 'vis' / 'eval')
-        self.final_renders_path = make_path(self.exp_path / 'results')
+        self.exp_path, self.ckpt_path, self.train_renders_path, self.eval_renders_path, self.final_renders_path = create_paths(self.exp_path)
 
         self.init_logger()
         pyrallis.dump(self.cfg, (self.exp_path / 'config.yaml').open('w'))
 
-        self.mesh_model = self.init_mesh_model()
-        self.diffusion = self.init_diffusion()
-        self.text_z = self.calc_text_embeddings()
-        self.optimizer = self.init_optimizer()
-        self.dataloaders = self.init_dataloaders()
 
+        '''
+        ming
+        '''
+        # self.mesh_model = self.init_mesh_model()
+        mode = init_mesh_model(self.cfg.render.backbone)
+        self.mesh_model = TexturedMeshModel(self.cfg, device=self.device, render_grid_size=self.cfg.render.train_grid_size,
+                                    latent_mode=mode, texture_resolution=self.cfg.guide.texture_resolution).to(self.device)
+        self.mesh_model = self.mesh_model.to(self.device)
+        self.diffusion = init_diffusion ( StableDiffusion(self.device, model_name=self.cfg.guide.diffusion_name,
+                                          concept_name=self.cfg.guide.concept_name,
+                                          latent_mode=self.mesh_model.latent_mode)
+        )
+        
+
+
+        self.text_z = self.calc_text_embeddings() # user input text
+
+        '''
+        ming
+        '''
+        self.optimizer = torch.optim.Adam(self.mesh_model.get_params(), lr=self.cfg.optim.lr, betas=(0.9, 0.99), eps=1e-15)
+        # self.dataloaders = self.init_dataloaders()
+        self.train_dataloader = ViewsDataset(self.cfg.render, device=self.device, type='train', size=100).dataloader()
+        self.val_loader = ViewsDataset(self.cfg.render, device=self.device, type='val',
+                                    size=self.cfg.log.eval_size).dataloader()
+        self.val_large_loader = ViewsDataset(self.cfg.render, device=self.device, type='val',
+                                        size=self.cfg.log.full_eval_size).dataloader() # Will be used for creating the final video
+        
         self.past_checkpoints = []
         if self.cfg.optim.resume:
             self.load_checkpoint(model_only=False)
         if self.cfg.optim.ckpt is not None:
             self.load_checkpoint(self.cfg.optim.ckpt, model_only=True)
 
+        '''
+        ming
+        '''
+        logger.info(
+            f'Loaded {self.cfg.render.backbone} Mesh, #parameters: {sum([p.numel() for p in self.mesh_model.parameters() if p.requires_grad])}')
+        logger.info(self.mesh_model)
         logger.info(f'Successfully initialized {self.cfg.log.exp_name}')
 
-    def init_mesh_model(self) -> nn.Module:
-        if self.cfg.render.backbone == 'texture-mesh':
-            from src.latent_paint.models.textured_mesh import TexturedMeshModel
-            model = TexturedMeshModel(self.cfg, device=self.device, render_grid_size=self.cfg.render.train_grid_size,
-                                      latent_mode=True, texture_resolution=self.cfg.guide.texture_resolution).to(self.device)
-        elif self.cfg.render.backbone == 'texture-rgb-mesh':
-            from src.latent_paint.models.textured_mesh import TexturedMeshModel
-            model = TexturedMeshModel(self.cfg, device=self.device, render_grid_size=self.cfg.render.train_grid_size,
-                                      latent_mode=False, texture_resolution=self.cfg.guide.texture_resolution).to(self.device)
-        else:
-            raise NotImplementedError(f'--backbone {self.cfg.render.backbone} is not implemented!')
 
-        model = model.to(self.device)
-        logger.info(
-            f'Loaded {self.cfg.render.backbone} Mesh, #parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])}')
-        logger.info(model)
-        return model
 
-    def init_diffusion(self) -> StableDiffusion:
-        diffusion_model = StableDiffusion(self.device, model_name=self.cfg.guide.diffusion_name,
-                                          concept_name=self.cfg.guide.concept_name,
-                                          latent_mode=self.mesh_model.latent_mode)
-        for p in diffusion_model.parameters():
-            p.requires_grad = False
-        return diffusion_model
 
     def calc_text_embeddings(self) -> Union[torch.Tensor, List[torch.Tensor]]:
         ref_text = self.cfg.guide.text
@@ -90,19 +97,8 @@ class Trainer:
                 text_z.append(self.diffusion.get_text_embeds([text]))
         return text_z
 
-    def init_optimizer(self) -> Optimizer:
-        optimizer = torch.optim.Adam(self.mesh_model.get_params(), lr=self.cfg.optim.lr, betas=(0.9, 0.99), eps=1e-15)
-        return optimizer
-
-    def init_dataloaders(self) -> Dict[str, DataLoader]:
-        train_dataloader = ViewsDataset(self.cfg.render, device=self.device, type='train', size=100).dataloader()
-        val_loader = ViewsDataset(self.cfg.render, device=self.device, type='val',
-                                  size=self.cfg.log.eval_size).dataloader()
-        # Will be used for creating the final video
-        val_large_loader = ViewsDataset(self.cfg.render, device=self.device, type='val',
-                                        size=self.cfg.log.full_eval_size).dataloader()
-        dataloaders = {'train': train_dataloader, 'val': val_loader, 'val_large': val_large_loader}
-        return dataloaders
+ 
+ 
 
     def init_logger(self):
         logger.remove()  # Remove default logger
@@ -111,16 +107,22 @@ class Trainer:
         logger.add(self.exp_path / 'log.txt', colorize=False, format=log_format)
 
     def train(self):
-        logger.info('Starting training ^_^')
+        '''
+        Project: 
+            mesh_model -> sdf network
+            Renderer -> volume rendering in sdf network
+            UNet2DConditionModel.from_pretrained -> latent radiance network
+        '''
+        logger.info('Starting training =^._.^=')
         # Evaluate the initialization
-        self.evaluate(self.dataloaders['val'], self.eval_renders_path)
+        self.evaluate(self.val_loader, self.eval_renders_path)
         self.mesh_model.train()
 
         pbar = tqdm(total=self.cfg.optim.iters, initial=self.train_step,
                     bar_format='{desc}: {percentage:3.0f}% training step {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
         while self.train_step < self.cfg.optim.iters:
             # Keep going over dataloader until finished the required number of iterations
-            for data in self.dataloaders['train']:
+            for data in self.train_dataloader:
                 self.train_step += 1
                 pbar.update(1)
 
@@ -132,18 +134,21 @@ class Trainer:
 
                 if self.train_step % self.cfg.log.save_interval == 0:
                     self.save_checkpoint(full=True)
-                    self.evaluate(self.dataloaders['val'], self.eval_renders_path)
+                    self.evaluate(self.val_loader, self.eval_renders_path)
                     self.mesh_model.train()
 
                 if np.random.uniform(0, 1) < 0.05:
                     # Randomly log rendered images throughout the training
                     self.log_train_renders(pred_rgbs)
-        logger.info('Finished Training ^_^')
+        logger.info('Finished Training =^._.^=')
         logger.info('Evaluating the last model...')
         self.full_eval()
         logger.info('\tDone!')
 
     def evaluate(self, dataloader: DataLoader, save_path: Path, save_as_video: bool = False):
+        '''
+        Save the rendered images
+        '''
         logger.info(f'Evaluating and saving model, iteration #{self.train_step}...')
         self.mesh_model.eval()
         save_path.mkdir(exist_ok=True)
@@ -175,7 +180,7 @@ class Trainer:
 
     def full_eval(self):
         try:
-            self.evaluate(self.dataloaders['val_large'], self.final_renders_path, save_as_video=True)
+            self.evaluate(self.val_large_loader, self.final_renders_path, save_as_video=True)
         except:
             logger.error('failed to save result video')
 
@@ -192,6 +197,7 @@ class Trainer:
         phi = data['phi']
         radius = data['radius']
 
+        # output: {'image': pred_map, 'mask': mask, 'background': pred_back, 'foreground': pred_features}
         outputs = self.mesh_model.render(theta=theta, phi=phi, radius=radius)
         pred_rgb = outputs['image']
 
@@ -203,12 +209,17 @@ class Trainer:
             text_z = self.text_z
 
         # Guidance loss
+        # text + 2d image for diffusor
+        # TODO: guidance loss is not used but I don't know why
         loss_guidance = self.diffusion.train_step(text_z, pred_rgb)
         loss = loss_guidance
 
         return pred_rgb, loss
 
     def eval_render(self, data):
+        '''
+        renderer inference
+        '''
         theta = data['theta']
         phi = data['phi']
         radius = data['radius']
